@@ -2,9 +2,9 @@
   "name": "k8s-tunneler",
   "productName": "k8s tunneler",
   "version": "0.1.0",
-  "description": "macOS menu bar app to manage kubectl port-forward connections",
+  "description": "Menu bar / tray app to manage kubectl port-forward connections (macOS and Linux)",
   "main": "src/main.js",
-  "author": "Thomas",
+  "author": "Thomas Karstens",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
