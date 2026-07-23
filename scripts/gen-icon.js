@@ -129,8 +129,122 @@ function draw(size, options = {}) {
   return rgba;
 }
 
+// ---------------------------------------------------------------------------
+// Full-colour application icon (build/icon.png -> .icns via electron-builder).
+// Rendered with supersampling for smooth edges, then box-downsampled.
+// ---------------------------------------------------------------------------
+function drawAppIcon(finalSize) {
+  const ss = 4;
+  const S = finalSize * ss;
+  const big = Buffer.alloc(S * S * 4, 0);
+
+  const put = (x, y, rgb, a) => {
+    if (x < 0 || y < 0 || x >= S || y >= S) return;
+    const i = (y * S + x) * 4;
+    big[i] = rgb[0];
+    big[i + 1] = rgb[1];
+    big[i + 2] = rgb[2];
+    big[i + 3] = a;
+  };
+
+  // Rounded-rectangle squircle background with a vertical blue gradient.
+  const margin = Math.round(S * 0.085);
+  const x0 = margin;
+  const y0 = margin;
+  const x1 = S - margin;
+  const y1 = S - margin;
+  const radius = Math.round((x1 - x0) * 0.2237); // Apple-ish continuous corner
+  const top = [42, 148, 255]; // #2a94ff
+  const bottom = [0, 92, 214]; // #005cd6
+
+  const insideRounded = (x, y) => {
+    if (x < x0 || x > x1 || y < y0 || y > y1) return false;
+    const rx = Math.min(Math.max(x, x0 + radius), x1 - radius);
+    const ry = Math.min(Math.max(y, y0 + radius), y1 - radius);
+    const dx = x - rx;
+    const dy = y - ry;
+    return dx * dx + dy * dy <= radius * radius;
+  };
+
+  for (let y = y0; y <= y1; y += 1) {
+    const tv = (y - y0) / (y1 - y0);
+    const col = [
+      Math.round(top[0] + (bottom[0] - top[0]) * tv),
+      Math.round(top[1] + (bottom[1] - top[1]) * tv),
+      Math.round(top[2] + (bottom[2] - top[2]) * tv),
+    ];
+    for (let x = x0; x <= x1; x += 1) {
+      if (insideRounded(x, y)) put(x, y, col, 255);
+    }
+  }
+
+  // White port-forward arrows glyph, centred.
+  const white = [255, 255, 255];
+  const cx = S / 2;
+  const t = S * 0.058; // shaft thickness
+  const headLen = S * 0.13;
+  const half = t * 1.75;
+  const left = S * 0.28;
+  const right = S * 0.72;
+  const topCy = S * 0.42;
+  const botCy = S * 0.58;
+
+  const rect = (ax0, ay0, ax1, ay1) => {
+    for (let y = Math.round(ay0); y < Math.round(ay1); y += 1) {
+      for (let x = Math.round(ax0); x < Math.round(ax1); x += 1) put(x, y, white, 255);
+    }
+  };
+  const arrowHead = (tipX, ccy, len, hh, dir) => {
+    for (let k = 0; k < len; k += 1) {
+      const x = Math.round(tipX - dir * k);
+      const h = Math.round((hh * (k + 1)) / len);
+      for (let y = Math.round(ccy - h); y <= Math.round(ccy + h); y += 1) put(x, y, white, 255);
+    }
+  };
+
+  // Top arrow -> right
+  rect(left, topCy - t / 2, right - headLen * 0.4, topCy + t / 2);
+  arrowHead(right, topCy, headLen, half, 1);
+  // Bottom arrow -> left
+  rect(left + headLen * 0.4, botCy - t / 2, right, botCy + t / 2);
+  arrowHead(left, botCy, headLen, half, -1);
+
+  // Box downsample (premultiplied alpha) big -> finalSize.
+  const out = Buffer.alloc(finalSize * finalSize * 4, 0);
+  for (let y = 0; y < finalSize; y += 1) {
+    for (let x = 0; x < finalSize; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      let aa = 0;
+      for (let sy = 0; sy < ss; sy += 1) {
+        for (let sx = 0; sx < ss; sx += 1) {
+          const i = ((y * ss + sy) * S + (x * ss + sx)) * 4;
+          const a = big[i + 3];
+          ar += big[i] * a;
+          ag += big[i + 1] * a;
+          ab += big[i + 2] * a;
+          aa += a;
+        }
+      }
+      const o = (y * finalSize + x) * 4;
+      const n = ss * ss;
+      out[o + 3] = Math.round(aa / n);
+      if (aa > 0) {
+        out[o] = Math.round(ar / aa);
+        out[o + 1] = Math.round(ag / aa);
+        out[o + 2] = Math.round(ab / aa);
+      }
+    }
+  }
+  return out;
+}
+
 const assetsDir = path.join(__dirname, '..', 'assets');
 fs.mkdirSync(assetsDir, { recursive: true });
+
+const buildDir = path.join(__dirname, '..', 'build');
+fs.mkdirSync(buildDir, { recursive: true });
 
 function writePair(name, options) {
   fs.writeFileSync(
@@ -150,4 +264,12 @@ writePair('trayTemplate', { color: [0, 0, 0] });
 writePair('trayActiveLight', { color: [0, 0, 0], dot: true });
 writePair('trayActiveDark', { color: [255, 255, 255], dot: true });
 
-console.log('Wrote tray icon assets (template + active light/dark variants)');
+// Application icon (1024x1024) for the packaged .app / .dmg.
+fs.writeFileSync(
+  path.join(buildDir, 'icon.png'),
+  encodePng(1024, drawAppIcon(1024))
+);
+
+console.log(
+  'Wrote tray icon assets (template + active light/dark variants) and build/icon.png'
+);
