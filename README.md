@@ -101,6 +101,14 @@ npm run dist:linux
 
 Run the resulting file with `chmod +x *.AppImage && ./k8s\ tunneler-*.AppImage`.
 
+### Automated builds
+
+A GitHub Actions workflow ([.github/workflows/build.yml](.github/workflows/build.yml))
+builds the macOS `.dmg` and Linux `.AppImage` on every push to `main`, on pull
+requests, and on version tags. The built files are uploaded as workflow
+artifacts, and pushing a tag like `v0.1.0` additionally attaches them to a
+GitHub Release. Builds are unsigned (signing discovery is disabled on CI).
+
 ## How it works
 
 - **Electron main process** owns the connection store and child processes. It
