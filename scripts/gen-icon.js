@@ -133,7 +133,7 @@ function draw(size, options = {}) {
 // Full-colour application icon (build/icon.png -> .icns via electron-builder).
 // Rendered with supersampling for smooth edges, then box-downsampled.
 // ---------------------------------------------------------------------------
-function drawAppIcon(finalSize) {
+function drawAppIcon(finalSize, options = {}) {
   const ss = 4;
   const S = finalSize * ss;
   const big = Buffer.alloc(S * S * 4, 0);
@@ -209,6 +209,23 @@ function drawAppIcon(finalSize) {
   rect(left + headLen * 0.4, botCy - t / 2, right, botCy + t / 2);
   arrowHead(left, botCy, headLen, half, -1);
 
+  if (options.dot) {
+    // Green "active" indicator with a white separation ring, bottom-right.
+    const green = [52, 199, 89];
+    const ring = [255, 255, 255];
+    const r = S * 0.15;
+    const dcx = x1 - r * 0.9;
+    const dcy = y1 - r * 0.9;
+    const outer = r + S * 0.022;
+    for (let y = 0; y < S; y += 1) {
+      for (let x = 0; x < S; x += 1) {
+        const d = Math.hypot(x + 0.5 - dcx, y + 0.5 - dcy);
+        if (d <= r) put(x, y, green, 255);
+        else if (d <= outer) put(x, y, ring, 255);
+      }
+    }
+  }
+
   // Box downsample (premultiplied alpha) big -> finalSize.
   const out = Buffer.alloc(finalSize * finalSize * 4, 0);
   for (let y = 0; y < finalSize; y += 1) {
@@ -264,12 +281,27 @@ writePair('trayTemplate', { color: [0, 0, 0] });
 writePair('trayActiveLight', { color: [0, 0, 0], dot: true });
 writePair('trayActiveDark', { color: [255, 255, 255], dot: true });
 
-// Application icon (1024x1024) for the packaged .app / .dmg.
+// Application icon (1024x1024) for the packaged .app / .dmg / AppImage.
 fs.writeFileSync(
   path.join(buildDir, 'icon.png'),
   encodePng(1024, drawAppIcon(1024))
 );
 
+// Linux tray icons: colour icons (Linux panels do not support macOS template
+// auto-inversion), idle + active (green dot) variants at 1x/2x.
+function writeAppIconPair(name, options) {
+  fs.writeFileSync(
+    path.join(assetsDir, `${name}.png`),
+    encodePng(32, drawAppIcon(32, options))
+  );
+  fs.writeFileSync(
+    path.join(assetsDir, `${name}@2x.png`),
+    encodePng(64, drawAppIcon(64, options))
+  );
+}
+writeAppIconPair('trayLinux', {});
+writeAppIconPair('trayLinuxActive', { dot: true });
+
 console.log(
-  'Wrote tray icon assets (template + active light/dark variants) and build/icon.png'
+  'Wrote tray icon assets (mac template + active variants, linux colour variants) and build/icon.png'
 );

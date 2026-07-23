@@ -1,9 +1,10 @@
 # k8s tunneler
 
-A macOS menu bar app for managing `kubectl port-forward` connections across
+A menu bar / tray app for managing `kubectl port-forward` connections across
 multiple clusters and namespaces. Store your port-forwards once, then start,
 stop, and open them in the browser from a small window attached to the menu bar
-icon.
+icon. Primarily built for macOS, with Linux support via a tray icon and app
+window.
 
 <p align="center">
   <img src="docs/screenshots/overview.png" alt="k8s tunneler overview window" width="380" />
@@ -46,7 +47,7 @@ local port is parsed from the command for the open-in-browser action.
 
 ## Requirements
 
-- macOS (Apple Silicon or Intel).
+- macOS (Apple Silicon or Intel), or Linux.
 - A working `kubectl` on your `PATH` (or at `~/google-cloud-sdk/bin/kubectl`).
   The app resolves `kubectl` and augments `PATH` with common locations
   (Homebrew, `~/google-cloud-sdk/bin`) so cluster auth plugins such as
@@ -60,8 +61,14 @@ npm install
 npm start
 ```
 
-The app runs as a pure menu bar app (no Dock icon). Click the menu bar icon to
-open the window; right-click the icon for a Quit option.
+On macOS the app runs as a pure menu bar app (no Dock icon): click the menu bar
+icon to open the popover window, and right-click it for a Quit option.
+
+On Linux it runs as a tray icon plus a normal app window as fallback (mostly for GNOME).
+Click the tray icon (or use its context menu's "Open") to show the window;
+closing the window hides it back to the tray, and "Quit" fully exits.
+Note that some desktop environments (notably stock GNOME) need a tray/AppIndicator
+extension for the tray icon to appear.
 
 ### Adding a connection
 
@@ -77,13 +84,22 @@ open the window; right-click the icon for a Quit option.
 
 ## Build a distributable app
 
+macOS (produces an installable `.dmg` in `dist/`):
+
 ```bash
 npm run dist
 ```
 
-This produces an installable `.dmg` in `dist/`. The build is unsigned, so on
-first launch you may need to right-click the app and choose **Open** to get past
-Gatekeeper.
+The macOS build is unsigned, so on first launch you may need to right-click the
+app and choose **Open** to get past Gatekeeper.
+
+Linux (produces an `AppImage` in `dist/`):
+
+```bash
+npm run dist:linux
+```
+
+Run the resulting file with `chmod +x *.AppImage && ./k8s\ tunneler-*.AppImage`.
 
 ## How it works
 
@@ -107,6 +123,33 @@ assets/                Menu bar tray icons (template + active variants)
 build/icon.png         Application icon (converted to .icns at build time)
 scripts/gen-icon.js    Generates all icon assets
 ```
+
+## Security considerations
+
+A few things worth knowing about how the app runs:
+
+- **It launches your login shell at startup.** To pick up variables like
+  `KUBECONFIG` (which a GUI app launched from Finder/Dock would not otherwise
+  inherit), the app runs your login shell once in interactive mode
+  (`$SHELL -ilc`), which sources your profile (e.g. `.zshrc`/`.zprofile`). This
+  means your normal shell startup code runs. The app only reads the resulting
+  environment variables - it does not evaluate or forward anything else from
+  your profile.
+- **Stored commands are executed with your `kubectl`.** Each connection's
+  command is run using your system `kubectl` and your active kube credentials,
+  so treat stored connections as trusted input. The app parses the command into
+  arguments and runs the `kubectl` binary directly (it does not pass your
+  command to a shell for interpretation, so there is no shell globbing or
+  command chaining), but it will still run whatever `kubectl` subcommand/args
+  you save.
+- **Connections are stored in plaintext.** They live as JSON in the app's data
+  directory (via `electron-store`). No secrets are stored - just the name and
+  the command string - but anything you put in the command is saved as-is.
+- **Everything stays local.** The app itself makes no network calls and sends no
+  telemetry; the only outbound activity is whatever `kubectl` does and opening
+  `http://localhost:<port>` in your browser.
+- **Builds are unsigned.** The packaged app is not code-signed or notarized, so
+  your OS will warn on first launch.
 
 ## License
 

@@ -66,9 +66,46 @@ function schemeForPort(port) {
   return port === 443 || port === 8443 ? 'https' : 'http';
 }
 
-/** Build a PATH that covers the usual locations a GUI app would otherwise miss. */
+/**
+ * Capture the user's login shell environment. When a GUI app is launched from
+ * Finder/Dock (not a terminal) it does NOT inherit variables set in the shell
+ * profile - most importantly KUBECONFIG - so kubectl would read the wrong
+ * kubeconfig and fail with "context was not found". We run the login shell once
+ * and read its environment. Returns {} on any failure (e.g. Windows).
+ */
+function loginShellEnv() {
+  if (process.platform === 'win32') return {};
+  const shell = process.env.SHELL || '/bin/zsh';
+  const marker = '__K8ST_ENV_START__';
+  try {
+    // -i -l so both .zprofile/.zshrc (or .bash_profile/.bashrc) are sourced.
+    // The marker lets us skip any prompt/banner noise printed before `env`.
+    const out = execFileSync(shell, ['-ilc', `printf '%s\\n' ${marker}; env`], {
+      timeout: 6000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const seg = out.slice(out.lastIndexOf(marker) + marker.length);
+    const env = {};
+    for (const line of seg.split('\n')) {
+      const i = line.indexOf('=');
+      if (i > 0) env[line.slice(0, i)] = line.slice(i + 1);
+    }
+    return env;
+  } catch (_) {
+    return {};
+  }
+}
+
+/**
+ * Build the environment for spawned kubectl processes: start from the login
+ * shell env (for KUBECONFIG etc.), fall back to our own process env, and make
+ * sure PATH covers the usual binary locations a GUI app would otherwise miss.
+ */
 function buildEnv() {
   const home = os.homedir();
+  const shellEnv = loginShellEnv();
+  const base = { ...process.env, ...shellEnv };
   const extra = [
     '/opt/homebrew/bin',
     '/usr/local/bin',
@@ -76,16 +113,19 @@ function buildEnv() {
     '/bin',
     '/usr/sbin',
     '/sbin',
+    '/snap/bin', // Linux (snap-installed kubectl)
+    path.join(home, '.local', 'bin'), // Linux user installs
     path.join(home, 'google-cloud-sdk', 'bin'),
   ];
-  const current = (process.env.PATH || '').split(':');
+  const current = (base.PATH || process.env.PATH || '').split(':');
   const seen = new Set();
   const merged = [...extra, ...current].filter((p) => {
     if (!p || seen.has(p)) return false;
     seen.add(p);
     return true;
   });
-  return { ...process.env, PATH: merged.join(':') };
+  base.PATH = merged.join(':');
+  return base;
 }
 
 /** Locate a usable kubectl binary. */
