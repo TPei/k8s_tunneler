@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>k8s tunneler</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="title">
+        <span class="logo">k8s</span>
+        <span>tunneler</span>
+      </div>
+      <button id="addBtn" class="icon-btn" title="Add connection" aria-label="Add connection">+</button>
+    </header>
+
+    <main>
+      <ul id="list" class="conn-list"></ul>
+      <div id="empty" class="empty hidden">
+        <p>No connections yet.</p>
+        <button id="emptyAddBtn" class="text-btn">Add your first connection</button>
+      </div>
+    </main>
+
+    <!-- Add / edit form -->
+    <div id="form" class="form hidden">
+      <h2 id="formTitle">New connection</h2>
+      <label>
+        Name
+        <input id="fName" type="text" placeholder="e.g. Prod API" autocomplete="off" />
+      </label>
+      <label>
+        kubectl command
+        <textarea
+          id="fCommand"
+          rows="3"
+          placeholder="kubectl port-forward -n my-namespace svc/my-app 8080:80"
+          autocomplete="off"
+        ></textarea>
+      </label>
+      <p class="hint">
+        Include the context/cluster and (optionally) the namespace. The local
+        port is detected from the command.
+      </p>
+      <p id="formError" class="form-error hidden"></p>
+      <div class="form-actions">
+        <button id="cancelBtn" class="text-btn">Cancel</button>
+        <button id="saveBtn" class="primary-btn">Save</button>
+      </div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

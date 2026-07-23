@@ -1,0 +1,308 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #86868b;
+  --border: #e5e5ea;
+  --hover: #f2f2f7;
+  --accent: #0a84ff;
+  --green: #34c759;
+  --red: #ff3b30;
+  --amber: #ff9f0a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --fg: #f5f5f7;
+    --muted: #98989d;
+    --border: #3a3a3c;
+    --hover: #2c2c2e;
+    --accent: #0a84ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Header */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.app-header .title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.logo {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.icon-btn {
+  -webkit-app-region: no-drag;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 22px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+}
+
+main {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Connection list */
+.conn-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.conn-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px;
+  border-radius: 8px;
+}
+
+.conn-item:hover {
+  background: var(--hover);
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+.status-dot.running {
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.2);
+}
+.status-dot.starting {
+  background: var(--amber);
+}
+.status-dot.error {
+  background: var(--red);
+}
+.status-dot.stopped {
+  background: var(--muted);
+}
+
+.conn-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.conn-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conn-sub {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conn-sub.error {
+  color: var(--red);
+}
+
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.act-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.act-btn:hover {
+  background: var(--border);
+}
+
+.act-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.act-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.act-btn.play {
+  color: var(--green);
+}
+.act-btn.stop {
+  color: var(--red);
+}
+
+/* Empty state */
+.empty {
+  text-align: center;
+  color: var(--muted);
+  margin-top: 40px;
+}
+
+.text-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+/* Form */
+.form {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.form h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.form input,
+.form textarea {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  resize: vertical;
+}
+
+.form textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.form input:focus,
+.form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.form-error {
+  color: var(--red);
+  font-size: 12px;
+  margin: 0;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.primary-btn {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.primary-btn:hover {
+  filter: brightness(1.05);
+}
+
+.delete-link {
+  color: var(--red);
+}

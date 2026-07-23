@@ -1,0 +1,38 @@
+{
+  "name": "k8s-tunneler",
+  "productName": "k8s tunneler",
+  "version": "0.1.0",
+  "description": "macOS menu bar app to manage kubectl port-forward connections",
+  "main": "src/main.js",
+  "author": "Thomas",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "menubar": "^9.5.2"
+  },
+  "devDependencies": {
+    "electron": "^34.5.8",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.thomas.k8stunneler",
+    "productName": "k8s tunneler",
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ],
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    }
+  }
+}

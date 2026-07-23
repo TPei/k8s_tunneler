@@ -1,0 +1,361 @@
+'use strict';
+
+const { EventEmitter } = require('events');
+const { spawn, execFileSync } = require('child_process');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const Store = require('electron-store');
+
+/**
+ * Split a command string into argv tokens, honouring single and double quotes.
+ * Good enough for kubectl port-forward commands (no shell expansion needed).
+ */
+function tokenize(command) {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let hasToken = false;
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      hasToken = true;
+    } else if (/\s/.test(ch)) {
+      if (hasToken) {
+        tokens.push(current);
+        current = '';
+        hasToken = false;
+      }
+    } else {
+      current += ch;
+      hasToken = true;
+    }
+  }
+  if (hasToken) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * Given the argv of a port-forward command, return the parsed local port
+ * from the first port-mapping token, or null if it can only be known at
+ * runtime (random port via ":REMOTE").
+ */
+function parseLocalPort(args) {
+  for (const arg of args) {
+    if (arg.startsWith('-')) continue;
+    let m = /^(\d+):(\d+)$/.exec(arg); // LOCAL:REMOTE
+    if (m) return parseInt(m[1], 10);
+    m = /^:(\d+)$/.exec(arg); // :REMOTE -> random local port
+    if (m) return null;
+    m = /^(\d+)$/.exec(arg); // bare REMOTE -> local == remote
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
+}
+
+function schemeForPort(port) {
+  return port === 443 || port === 8443 ? 'https' : 'http';
+}
+
+/** Build a PATH that covers the usual locations a GUI app would otherwise miss. */
+function buildEnv() {
+  const home = os.homedir();
+  const extra = [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+    path.join(home, 'google-cloud-sdk', 'bin'),
+  ];
+  const current = (process.env.PATH || '').split(':');
+  const seen = new Set();
+  const merged = [...extra, ...current].filter((p) => {
+    if (!p || seen.has(p)) return false;
+    seen.add(p);
+    return true;
+  });
+  return { ...process.env, PATH: merged.join(':') };
+}
+
+/** Locate a usable kubectl binary. */
+function resolveKubectl(env) {
+  try {
+    const out = execFileSync('/usr/bin/which', ['kubectl'], { env }).toString().trim();
+    if (out) return out;
+  } catch (_) {
+    /* fall through to known locations */
+  }
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, 'google-cloud-sdk', 'bin', 'kubectl'),
+    '/opt/homebrew/bin/kubectl',
+    '/usr/local/bin/kubectl',
+    '/usr/bin/kubectl',
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return 'kubectl';
+}
+
+class ConnectionManager extends EventEmitter {
+  constructor() {
+    super();
+    this.store = new Store({
+      name: 'connections',
+      defaults: { connections: [] },
+    });
+    this.env = buildEnv();
+    this.kubectlPath = resolveKubectl(this.env);
+    // runtime state keyed by connection id
+    this.runtime = new Map();
+  }
+
+  _runtimeFor(id) {
+    if (!this.runtime.has(id)) {
+      this.runtime.set(id, {
+        status: 'stopped',
+        pid: null,
+        localPort: null,
+        scheme: 'http',
+        lastError: null,
+        child: null,
+        stopping: false,
+      });
+    }
+    return this.runtime.get(id);
+  }
+
+  _persisted() {
+    return this.store.get('connections', []);
+  }
+
+  /** Public snapshot of a connection combining persisted + runtime state. */
+  _snapshot(conn) {
+    const rt = this._runtimeFor(conn.id);
+    return {
+      id: conn.id,
+      name: conn.name,
+      command: conn.command,
+      status: rt.status,
+      pid: rt.pid,
+      localPort: rt.localPort,
+      scheme: rt.scheme,
+      url: rt.localPort ? `${rt.scheme}://localhost:${rt.localPort}` : null,
+      lastError: rt.lastError,
+    };
+  }
+
+  list() {
+    return this._persisted().map((c) => this._snapshot(c));
+  }
+
+  get(id) {
+    const conn = this._persisted().find((c) => c.id === id);
+    return conn ? this._snapshot(conn) : null;
+  }
+
+  add({ name, command }) {
+    const conn = {
+      id: crypto.randomUUID(),
+      name: (name || '').trim() || 'Untitled',
+      command: (command || '').trim(),
+    };
+    const all = this._persisted();
+    all.push(conn);
+    this.store.set('connections', all);
+    this._emitStatus(conn.id);
+    return this._snapshot(conn);
+  }
+
+  update(id, { name, command }) {
+    const all = this._persisted();
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx === -1) return null;
+    if (typeof name === 'string') all[idx].name = name.trim() || 'Untitled';
+    if (typeof command === 'string') all[idx].command = command.trim();
+    this.store.set('connections', all);
+    this._emitStatus(id);
+    return this._snapshot(all[idx]);
+  }
+
+  remove(id) {
+    this.stop(id);
+    const all = this._persisted().filter((c) => c.id !== id);
+    this.store.set('connections', all);
+    this.runtime.delete(id);
+    return true;
+  }
+
+  _emitStatus(id) {
+    const snap = this.get(id);
+    if (snap) this.emit('status', snap);
+  }
+
+  start(id) {
+    const conn = this._persisted().find((c) => c.id === id);
+    if (!conn) return null;
+    const rt = this._runtimeFor(id);
+    if (rt.child) return this._snapshot(conn); // already running
+
+    let args = tokenize(conn.command);
+    if (args.length && /kubectl$/.test(args[0])) {
+      args = args.slice(1); // strip leading "kubectl"
+    }
+    if (args.length === 0 || !args.includes('port-forward')) {
+      rt.status = 'error';
+      rt.lastError = 'Command must be a "kubectl port-forward ..." command.';
+      this._emitStatus(id);
+      return this._snapshot(conn);
+    }
+
+    const parsedPort = parseLocalPort(args);
+    rt.localPort = parsedPort;
+    rt.scheme = parsedPort ? schemeForPort(parsedPort) : 'http';
+    rt.lastError = null;
+    rt.stopping = false;
+    rt.status = 'starting';
+    this._emitStatus(id);
+
+    let child;
+    try {
+      child = spawn(this.kubectlPath, args, {
+        env: this.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      rt.status = 'error';
+      rt.lastError = err.message;
+      rt.child = null;
+      this._emitStatus(id);
+      return this._snapshot(conn);
+    }
+
+    rt.child = child;
+    rt.pid = child.pid;
+
+    const handleLine = (line) => {
+      const m = /Forwarding from (?:127\.0\.0\.1|\[::1\]|localhost):(\d+)/i.exec(line);
+      if (m) {
+        rt.localPort = parseInt(m[1], 10);
+        rt.scheme = schemeForPort(rt.localPort);
+        if (rt.status !== 'running') {
+          rt.status = 'running';
+        }
+        this._emitStatus(id);
+      }
+    };
+
+    child.stdout.on('data', (buf) => {
+      buf
+        .toString()
+        .split('\n')
+        .forEach((l) => l.trim() && handleLine(l));
+    });
+
+    child.stderr.on('data', (buf) => {
+      const text = buf.toString();
+      text
+        .split('\n')
+        .forEach((l) => l.trim() && handleLine(l));
+      // kubectl reports failures on stderr
+      if (/error|unable|forbidden|not found|refused/i.test(text)) {
+        rt.lastError = text.trim().split('\n').slice(-1)[0];
+        this._emitStatus(id);
+      }
+    });
+
+    child.on('error', (err) => {
+      rt.status = 'error';
+      rt.lastError = err.message;
+      rt.child = null;
+      rt.pid = null;
+      this._emitStatus(id);
+    });
+
+    child.on('close', (code) => {
+      rt.child = null;
+      rt.pid = null;
+      if (rt.stopping) {
+        rt.status = 'stopped';
+        rt.lastError = null;
+      } else if (code && code !== 0) {
+        rt.status = 'error';
+        if (!rt.lastError) rt.lastError = `kubectl exited with code ${code}`;
+      } else {
+        rt.status = 'stopped';
+      }
+      rt.stopping = false;
+      this._emitStatus(id);
+    });
+
+    return this._snapshot(conn);
+  }
+
+  stop(id) {
+    const rt = this.runtime.get(id);
+    if (!rt || !rt.child) {
+      if (rt && rt.status !== 'stopped') {
+        rt.status = 'stopped';
+        this._emitStatus(id);
+      }
+      return this.get(id);
+    }
+    rt.stopping = true;
+    rt.status = 'stopped';
+    try {
+      rt.child.kill('SIGTERM');
+      // Escalate if it refuses to die.
+      const child = rt.child;
+      setTimeout(() => {
+        if (child && !child.killed) {
+          try {
+            child.kill('SIGKILL');
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      }, 2000);
+    } catch (_) {
+      /* ignore */
+    }
+    this._emitStatus(id);
+    return this.get(id);
+  }
+
+  stopAll() {
+    for (const id of this.runtime.keys()) {
+      const rt = this.runtime.get(id);
+      if (rt && rt.child) {
+        rt.stopping = true;
+        try {
+          rt.child.kill('SIGTERM');
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  urlFor(id) {
+    const snap = this.get(id);
+    return snap ? snap.url : null;
+  }
+}
+
+module.exports = { ConnectionManager, tokenize, parseLocalPort };
