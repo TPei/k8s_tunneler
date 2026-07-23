@@ -107,3 +107,7 @@ assets/                Menu bar tray icons (template + active variants)
 build/icon.png         Application icon (converted to .icns at build time)
 scripts/gen-icon.js    Generates all icon assets
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
