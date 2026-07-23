@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { app, ipcMain, shell, nativeImage, Menu } = require('electron');
+const { app, ipcMain, shell, nativeImage, nativeTheme, Menu } = require('electron');
 const { menubar } = require('menubar');
 const { ConnectionManager } = require('./connectionManager');
 
@@ -10,10 +10,28 @@ if (app.dock) app.dock.hide();
 
 const manager = new ConnectionManager();
 
-const trayIcon = nativeImage.createFromPath(
-  path.join(__dirname, '..', 'assets', 'trayTemplate.png')
-);
+const assetPath = (name) => path.join(__dirname, '..', 'assets', name);
+
+// Idle icon: monochrome template so it adapts to the menu bar automatically.
+const trayIcon = nativeImage.createFromPath(assetPath('trayTemplate.png'));
 trayIcon.setTemplateImage(true);
+
+// Active icons: non-template (so the green dot keeps its colour). We pick the
+// arrow colour to match the current menu-bar appearance.
+const activeLight = nativeImage.createFromPath(assetPath('trayActiveLight.png'));
+const activeDark = nativeImage.createFromPath(assetPath('trayActiveDark.png'));
+
+function updateTrayIcon() {
+  if (!mb.tray) return;
+  const active = manager
+    .list()
+    .some((c) => c.status === 'running' || c.status === 'starting');
+  if (!active) {
+    mb.tray.setImage(trayIcon);
+    return;
+  }
+  mb.tray.setImage(nativeTheme.shouldUseDarkColors ? activeDark : activeLight);
+}
 
 const mb = menubar({
   index: `file://${path.join(__dirname, 'renderer', 'index.html')}`,
@@ -46,13 +64,19 @@ mb.on('ready', () => {
   mb.tray.on('right-click', () => {
     mb.tray.popUpContextMenu(contextMenu);
   });
+
+  updateTrayIcon();
 });
 
-// Push runtime status changes to the renderer.
+// Re-render the active icon when the system appearance changes.
+nativeTheme.on('updated', updateTrayIcon);
+
+// Push runtime status changes to the renderer and refresh the tray indicator.
 manager.on('status', (snapshot) => {
   if (mb.window && !mb.window.isDestroyed()) {
     mb.window.webContents.send('connections:status', snapshot);
   }
+  updateTrayIcon();
 });
 
 // ---- IPC surface ----

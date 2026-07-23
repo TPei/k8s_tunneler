@@ -65,19 +65,24 @@ function encodePng(size, rgba) {
   ]);
 }
 
-function draw(size) {
+// Draw the port-forward glyph. Options:
+//   color: [r,g,b] for the arrows
+//   dot:   when true, paint a green "active" indicator in the corner
+function draw(size, options = {}) {
+  const color = options.color || [0, 0, 0];
   const rgba = Buffer.alloc(size * size * 4, 0);
-  const set = (x, y, a) => {
+  const put = (x, y, rgb, a) => {
     if (x < 0 || y < 0 || x >= size || y >= size) return;
     const i = (y * size + x) * 4;
-    rgba[i] = 0;
-    rgba[i + 1] = 0;
-    rgba[i + 2] = 0;
-    rgba[i + 3] = Math.max(rgba[i + 3], a);
+    rgba[i] = rgb[0];
+    rgba[i + 1] = rgb[1];
+    rgba[i + 2] = rgb[2];
+    rgba[i + 3] = a;
   };
+  const set = (x, y) => put(x, y, color, 255);
   const rect = (x0, y0, x1, y1) => {
     for (let y = Math.round(y0); y < Math.round(y1); y += 1) {
-      for (let x = Math.round(x0); x < Math.round(x1); x += 1) set(x, y, 255);
+      for (let x = Math.round(x0); x < Math.round(x1); x += 1) set(x, y);
     }
   };
   // filled triangle arrowhead. dir: +1 points right, -1 points left
@@ -85,7 +90,7 @@ function draw(size) {
     for (let k = 0; k < len; k += 1) {
       const x = tipX - dir * k;
       const h = Math.round((half * (k + 1)) / len);
-      for (let y = cy - h; y <= cy + h; y += 1) set(x, Math.round(y), 255);
+      for (let y = cy - h; y <= cy + h; y += 1) set(x, Math.round(y));
     }
   };
 
@@ -105,16 +110,44 @@ function draw(size) {
   rect(margin + headLen * 0.4, botCy - t / 2, size - margin, botCy + t / 2);
   arrowHead(margin, botCy, headLen, half, -1);
 
+  if (options.dot) {
+    // Green "active" dot in the bottom-right corner, with a transparent gap so
+    // it stays legible over the arrows on any menu-bar background.
+    const green = [52, 199, 89];
+    const r = size * 0.28;
+    const cx = size - r - 1;
+    const cy = size - r - 1;
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        if (d <= r) put(x, y, green, 255);
+        else if (d <= r + 1.4) put(x, y, green, 0); // clear ring for separation
+      }
+    }
+  }
+
   return rgba;
 }
 
 const assetsDir = path.join(__dirname, '..', 'assets');
 fs.mkdirSync(assetsDir, { recursive: true });
 
-fs.writeFileSync(path.join(assetsDir, 'trayTemplate.png'), encodePng(16, draw(16)));
-fs.writeFileSync(
-  path.join(assetsDir, 'trayTemplate@2x.png'),
-  encodePng(32, draw(32))
-);
+function writePair(name, options) {
+  fs.writeFileSync(
+    path.join(assetsDir, `${name}.png`),
+    encodePng(16, draw(16, options))
+  );
+  fs.writeFileSync(
+    path.join(assetsDir, `${name}@2x.png`),
+    encodePng(32, draw(32, options))
+  );
+}
 
-console.log('Wrote assets/trayTemplate.png and assets/trayTemplate@2x.png');
+// Idle: monochrome template icon (adapts to light/dark menu bar).
+writePair('trayTemplate', { color: [0, 0, 0] });
+// Active (non-template): black arrows for a light menu bar, white arrows for a
+// dark menu bar, both with the green indicator dot.
+writePair('trayActiveLight', { color: [0, 0, 0], dot: true });
+writePair('trayActiveDark', { color: [255, 255, 255], dot: true });
+
+console.log('Wrote tray icon assets (template + active light/dark variants)');
