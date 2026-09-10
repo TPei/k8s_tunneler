@@ -23,6 +23,7 @@
   "build": {
     "appId": "dev.thomas.k8stunneler",
     "productName": "k8s tunneler",
+    "afterPack": "scripts/afterPack.js",
     "files": [
       "src/**/*",
       "assets/**/*"

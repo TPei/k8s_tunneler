@@ -106,8 +106,21 @@ macOS (produces an installable `.dmg` in `dist/`):
 npm run dist
 ```
 
-The macOS build is unsigned, so on first launch you may need to right-click the
-app and choose **Open** to get past Gatekeeper.
+The macOS build is ad-hoc signed but not notarized (that needs a paid Apple
+Developer account), so Gatekeeper blocks a downloaded copy on first launch.
+Either of these gets you past it once:
+
+- Try to open the app, then go to **System Settings > Privacy & Security**,
+  scroll down and click **Open Anyway** next to the k8s tunneler message.
+- Or clear the download quarantine flag from a terminal:
+
+  ```bash
+  xattr -cr "/Applications/k8s tunneler.app"
+  ```
+
+If you instead see *"k8s tunneler is damaged and can't be opened"*, you have a
+build from before ad-hoc signing was added; the `xattr` command above fixes
+that too.
 
 Linux (produces an `AppImage` in `dist/`):
 
@@ -123,7 +136,8 @@ A GitHub Actions workflow ([.github/workflows/build.yml](.github/workflows/build
 builds the macOS `.dmg` and Linux `.AppImage` on every push to `main`, on pull
 requests, and on version tags. The built files are uploaded as workflow
 artifacts, and pushing a tag like `v0.1.0` additionally attaches them to a
-GitHub Release. Builds are unsigned (signing discovery is disabled on CI).
+GitHub Release. No Developer ID is configured on CI; the macOS app is ad-hoc
+signed by [scripts/afterPack.js](scripts/afterPack.js) after packaging.
 
 ## How it works
 
@@ -149,6 +163,7 @@ src/
 assets/                Menu bar tray icons (template + active/connecting variants)
 build/icon.png         Application icon (converted to .icns at build time)
 scripts/gen-icon.js    Generates all icon assets
+scripts/afterPack.js   electron-builder hook: ad-hoc signs the macOS .app
 test/                  node:test suite (*.test.js) + fake kubectl helpers
 ```
 
@@ -176,8 +191,10 @@ A few things worth knowing about how the app runs:
 - **Everything stays local.** The app itself makes no network calls and sends no
   telemetry; the only outbound activity is whatever `kubectl` does and opening
   `http://localhost:<port>` in your browser.
-- **Builds are unsigned.** The packaged app is not code-signed or notarized, so
-  your OS will warn on first launch.
+- **Builds are ad-hoc signed, not notarized.** The macOS app carries an ad-hoc
+  code signature (no Developer ID) and is not notarized by Apple, so macOS
+  will warn on first launch and you need to allow it explicitly (see
+  "Build a distributable app" above).
 
 ## License
 
