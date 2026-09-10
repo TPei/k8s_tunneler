@@ -12,6 +12,7 @@ const {
   BrowserWindow,
 } = require('electron');
 const { ConnectionManager } = require('./connectionManager');
+const { trayState } = require('./trayState');
 
 const isMac = process.platform === 'darwin';
 
@@ -29,14 +30,18 @@ const webPreferences = {
 };
 
 // --- Tray icons -------------------------------------------------------------
-// macOS: monochrome template (idle) + non-template colour variants (active).
+// macOS: monochrome template (idle) + non-template colour variants with a
+// green (active) or amber (connecting) dot, per light/dark menu bar.
 const macTemplate = nativeImage.createFromPath(assetPath('trayTemplate.png'));
 macTemplate.setTemplateImage(true);
 const macActiveLight = nativeImage.createFromPath(assetPath('trayActiveLight.png'));
 const macActiveDark = nativeImage.createFromPath(assetPath('trayActiveDark.png'));
+const macConnectingLight = nativeImage.createFromPath(assetPath('trayConnectingLight.png'));
+const macConnectingDark = nativeImage.createFromPath(assetPath('trayConnectingDark.png'));
 // Linux: colour icons (no template auto-inversion on Linux panels).
 const linuxIdle = nativeImage.createFromPath(assetPath('trayLinux.png'));
 const linuxActive = nativeImage.createFromPath(assetPath('trayLinuxActive.png'));
+const linuxConnecting = nativeImage.createFromPath(assetPath('trayLinuxConnecting.png'));
 
 // Platform-specific handles, assigned during setup.
 let mb = null; // menubar instance (macOS)
@@ -51,21 +56,19 @@ function getWindow() {
   return isMac ? mb && mb.window : uiWindow;
 }
 
-function anyActive() {
-  return manager
-    .list()
-    .some((c) => c.status === 'running' || c.status === 'starting');
-}
-
 function updateTrayIcon() {
   const t = getTray();
   if (!t) return;
-  const active = anyActive();
+  const state = trayState(manager.list().map((c) => c.status));
   if (isMac) {
-    if (!active) t.setImage(macTemplate);
-    else t.setImage(nativeTheme.shouldUseDarkColors ? macActiveDark : macActiveLight);
+    const dark = nativeTheme.shouldUseDarkColors;
+    if (state === 'connecting') t.setImage(dark ? macConnectingDark : macConnectingLight);
+    else if (state === 'active') t.setImage(dark ? macActiveDark : macActiveLight);
+    else t.setImage(macTemplate);
+  } else if (state === 'connecting') {
+    t.setImage(linuxConnecting);
   } else {
-    t.setImage(active ? linuxActive : linuxIdle);
+    t.setImage(state === 'active' ? linuxActive : linuxIdle);
   }
 }
 

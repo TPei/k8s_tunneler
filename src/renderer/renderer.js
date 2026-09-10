@@ -38,6 +38,10 @@ function subtitleFor(conn) {
       : 'Running';
   }
   if (conn.status === 'starting') return 'Starting...';
+  if (conn.status === 'reconnecting') {
+    const base = `Reconnecting (attempt ${conn.attempt || 1})...`;
+    return conn.lastError ? `${base} ${conn.lastError}` : base;
+  }
   if (conn.localPort) return `Port ${conn.localPort}`;
   return 'Stopped';
 }
@@ -73,7 +77,10 @@ function render() {
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
 
-    const isRunning = conn.status === 'running' || conn.status === 'starting';
+    const isRunning =
+      conn.status === 'running' ||
+      conn.status === 'starting' ||
+      conn.status === 'reconnecting';
 
     // Play / Stop toggle
     const toggle = document.createElement('button');

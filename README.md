@@ -22,12 +22,16 @@ live status indicator, so you can see and control everything from one place.
 - Lives in the menu bar - click the icon to open an attached mini window.
 - Store connections with a name and a full `kubectl port-forward` command
   (including the cluster/context and, optionally, the namespace).
-- Per-connection status dot (stopped / starting / running / error) and a
-  play/stop button to toggle the forward.
+- Per-connection status dot (stopped / starting / running / reconnecting /
+  error) and a play/stop button to toggle the forward.
+- Auto-reconnect: if a forward drops (pod restarted, network hiccup, laptop
+  woke from sleep), it is restarted automatically with exponential backoff
+  (1s up to 30s) until it comes back or you press stop.
 - Open-in-browser button that launches the locally forwarded port (the local
   port is detected automatically from the command).
 - Add, edit, and delete connections; they persist across restarts.
-- The menu bar icon gains a green dot whenever a forward is active.
+- The menu bar icon gains a green dot whenever a forward is running, and an
+  amber dot while any forward is starting or reconnecting.
 
 ## Screenshots
 
@@ -69,6 +73,18 @@ Click the tray icon (or use its context menu's "Open") to show the window;
 closing the window hides it back to the tray, and "Quit" fully exits.
 Note that some desktop environments (notably stock GNOME) need a tray/AppIndicator
 extension for the tray icon to appear.
+
+### Running the tests
+
+```bash
+npm test
+```
+
+The suite uses Node's built-in test runner (no extra dependencies) and runs
+under plain Node - no Electron or display needed. It covers command parsing,
+the connection lifecycle and auto-reconnect behaviour (against small fake
+`kubectl` scripts), tray indicator state, and the icon generator. CI runs it
+before building the distributables.
 
 ### Adding a connection
 
@@ -113,7 +129,9 @@ GitHub Release. Builds are unsigned (signing discovery is disabled on CI).
 
 - **Electron main process** owns the connection store and child processes. It
   spawns the system `kubectl` for each active forward and tracks its status by
-  watching for the `Forwarding from 127.0.0.1:PORT` line on stdout.
+  watching for the `Forwarding from 127.0.0.1:PORT` line on stdout. If kubectl
+  exits (or reports `lost connection to pod`) while the connection is meant to
+  be running, it is respawned with exponential backoff.
 - **Renderer** is a small UI that talks to the main process only through a
   `contextBridge` preload API (context isolation on, node integration off).
 - **Storage** uses `electron-store`, persisting connections as JSON in the app's
@@ -124,12 +142,14 @@ GitHub Release. Builds are unsigned (signing discovery is disabled on CI).
 ```
 src/
   main.js              Electron main process: tray, window, IPC, tray indicator
-  connectionManager.js Store-backed CRUD + kubectl spawn/stop + port parsing
+  connectionManager.js Store-backed CRUD + kubectl spawn/stop/reconnect + port parsing
+  trayState.js         Pure helper mapping connection statuses to the tray indicator
   preload.js           contextBridge API bridging renderer <-> main
   renderer/            Mini window UI (index.html, styles.css, renderer.js)
-assets/                Menu bar tray icons (template + active variants)
+assets/                Menu bar tray icons (template + active/connecting variants)
 build/icon.png         Application icon (converted to .icns at build time)
 scripts/gen-icon.js    Generates all icon assets
+test/                  node:test suite (*.test.js) + fake kubectl helpers
 ```
 
 ## Security considerations

@@ -65,9 +65,13 @@ function encodePng(size, rgba) {
   ]);
 }
 
+// Indicator dot colours (kept in sync with --green / --amber in styles.css).
+const GREEN = [52, 199, 89];
+const AMBER = [255, 159, 10];
+
 // Draw the port-forward glyph. Options:
 //   color: [r,g,b] for the arrows
-//   dot:   when true, paint a green "active" indicator in the corner
+//   dot:   [r,g,b] to paint an indicator dot of that colour in the corner
 function draw(size, options = {}) {
   const color = options.color || [0, 0, 0];
   const rgba = Buffer.alloc(size * size * 4, 0);
@@ -111,17 +115,17 @@ function draw(size, options = {}) {
   arrowHead(margin, botCy, headLen, half, -1);
 
   if (options.dot) {
-    // Green "active" dot in the bottom-right corner, with a transparent gap so
-    // it stays legible over the arrows on any menu-bar background.
-    const green = [52, 199, 89];
+    // Indicator dot in the bottom-right corner, with a transparent gap so it
+    // stays legible over the arrows on any menu-bar background.
+    const dot = options.dot;
     const r = size * 0.28;
     const cx = size - r - 1;
     const cy = size - r - 1;
     for (let y = 0; y < size; y += 1) {
       for (let x = 0; x < size; x += 1) {
         const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
-        if (d <= r) put(x, y, green, 255);
-        else if (d <= r + 1.4) put(x, y, green, 0); // clear ring for separation
+        if (d <= r) put(x, y, dot, 255);
+        else if (d <= r + 1.4) put(x, y, dot, 0); // clear ring for separation
       }
     }
   }
@@ -210,8 +214,8 @@ function drawAppIcon(finalSize, options = {}) {
   arrowHead(left, botCy, headLen, half, -1);
 
   if (options.dot) {
-    // Green "active" indicator with a white separation ring, bottom-right.
-    const green = [52, 199, 89];
+    // Indicator dot with a white separation ring, bottom-right.
+    const dot = options.dot;
     const ring = [255, 255, 255];
     const r = S * 0.15;
     const dcx = x1 - r * 0.9;
@@ -220,7 +224,7 @@ function drawAppIcon(finalSize, options = {}) {
     for (let y = 0; y < S; y += 1) {
       for (let x = 0; x < S; x += 1) {
         const d = Math.hypot(x + 0.5 - dcx, y + 0.5 - dcy);
-        if (d <= r) put(x, y, green, 255);
+        if (d <= r) put(x, y, dot, 255);
         else if (d <= outer) put(x, y, ring, 255);
       }
     }
@@ -257,51 +261,62 @@ function drawAppIcon(finalSize, options = {}) {
   return out;
 }
 
-const assetsDir = path.join(__dirname, '..', 'assets');
-fs.mkdirSync(assetsDir, { recursive: true });
+function main() {
+  const assetsDir = path.join(__dirname, '..', 'assets');
+  fs.mkdirSync(assetsDir, { recursive: true });
 
-const buildDir = path.join(__dirname, '..', 'build');
-fs.mkdirSync(buildDir, { recursive: true });
+  const buildDir = path.join(__dirname, '..', 'build');
+  fs.mkdirSync(buildDir, { recursive: true });
 
-function writePair(name, options) {
+  const writePair = (name, options) => {
+    fs.writeFileSync(
+      path.join(assetsDir, `${name}.png`),
+      encodePng(16, draw(16, options))
+    );
+    fs.writeFileSync(
+      path.join(assetsDir, `${name}@2x.png`),
+      encodePng(32, draw(32, options))
+    );
+  };
+
+  // Idle: monochrome template icon (adapts to light/dark menu bar).
+  writePair('trayTemplate', { color: [0, 0, 0] });
+  // Active (non-template): black arrows for a light menu bar, white arrows for
+  // a dark menu bar, both with the green indicator dot.
+  writePair('trayActiveLight', { color: [0, 0, 0], dot: GREEN });
+  writePair('trayActiveDark', { color: [255, 255, 255], dot: GREEN });
+  // Connecting: same, with an amber dot (a forward is starting / reconnecting).
+  writePair('trayConnectingLight', { color: [0, 0, 0], dot: AMBER });
+  writePair('trayConnectingDark', { color: [255, 255, 255], dot: AMBER });
+
+  // Application icon (1024x1024) for the packaged .app / .dmg / AppImage.
   fs.writeFileSync(
-    path.join(assetsDir, `${name}.png`),
-    encodePng(16, draw(16, options))
+    path.join(buildDir, 'icon.png'),
+    encodePng(1024, drawAppIcon(1024))
   );
-  fs.writeFileSync(
-    path.join(assetsDir, `${name}@2x.png`),
-    encodePng(32, draw(32, options))
+
+  // Linux tray icons: colour icons (Linux panels do not support macOS template
+  // auto-inversion), idle + active (green dot) + connecting (amber dot)
+  // variants at 1x/2x.
+  const writeAppIconPair = (name, options) => {
+    fs.writeFileSync(
+      path.join(assetsDir, `${name}.png`),
+      encodePng(32, drawAppIcon(32, options))
+    );
+    fs.writeFileSync(
+      path.join(assetsDir, `${name}@2x.png`),
+      encodePng(64, drawAppIcon(64, options))
+    );
+  };
+  writeAppIconPair('trayLinux', {});
+  writeAppIconPair('trayLinuxActive', { dot: GREEN });
+  writeAppIconPair('trayLinuxConnecting', { dot: AMBER });
+
+  console.log(
+    'Wrote tray icon assets (mac template + active/connecting variants, linux colour variants) and build/icon.png'
   );
 }
 
-// Idle: monochrome template icon (adapts to light/dark menu bar).
-writePair('trayTemplate', { color: [0, 0, 0] });
-// Active (non-template): black arrows for a light menu bar, white arrows for a
-// dark menu bar, both with the green indicator dot.
-writePair('trayActiveLight', { color: [0, 0, 0], dot: true });
-writePair('trayActiveDark', { color: [255, 255, 255], dot: true });
+if (require.main === module) main();
 
-// Application icon (1024x1024) for the packaged .app / .dmg / AppImage.
-fs.writeFileSync(
-  path.join(buildDir, 'icon.png'),
-  encodePng(1024, drawAppIcon(1024))
-);
-
-// Linux tray icons: colour icons (Linux panels do not support macOS template
-// auto-inversion), idle + active (green dot) variants at 1x/2x.
-function writeAppIconPair(name, options) {
-  fs.writeFileSync(
-    path.join(assetsDir, `${name}.png`),
-    encodePng(32, drawAppIcon(32, options))
-  );
-  fs.writeFileSync(
-    path.join(assetsDir, `${name}@2x.png`),
-    encodePng(64, drawAppIcon(64, options))
-  );
-}
-writeAppIconPair('trayLinux', {});
-writeAppIconPair('trayLinuxActive', { dot: true });
-
-console.log(
-  'Wrote tray icon assets (mac template + active variants, linux colour variants) and build/icon.png'
-);
+module.exports = { draw, drawAppIcon, encodePng, GREEN, AMBER };

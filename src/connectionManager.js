@@ -8,6 +8,18 @@ const fs = require('fs');
 const crypto = require('crypto');
 const Store = require('electron-store');
 
+// Auto-reconnect backoff: 1s, 2s, 4s, ... capped at 30s, retried indefinitely.
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30000;
+// stderr output that means the forward is dead even if kubectl is still alive.
+const LOST_CONNECTION_RE =
+  /lost connection to pod|error forwarding port|connection refused|container not running/i;
+
+/** Delay before reconnect attempt number `attempt` (0-based). */
+function backoffDelay(attempt, baseMs = RECONNECT_BASE_MS, maxMs = RECONNECT_MAX_MS) {
+  return Math.min(baseMs * 2 ** attempt, maxMs);
+}
+
 /**
  * Split a command string into argv tokens, honouring single and double quotes.
  * Good enough for kubectl port-forward commands (no shell expansion needed).
@@ -154,14 +166,28 @@ function resolveKubectl(env) {
 }
 
 class ConnectionManager extends EventEmitter {
-  constructor() {
+  /**
+   * @param {object} [options]
+   * @param {{get: Function, set: Function}} [options.store] persistence backend
+   *   (defaults to electron-store; tests inject an in-memory object)
+   * @param {object} [options.env] environment for spawned kubectl
+   *   (defaults to the login-shell-derived env)
+   * @param {string} [options.kubectlPath] kubectl binary to spawn
+   * @param {number} [options.reconnectBaseMs] initial backoff delay
+   * @param {number} [options.reconnectMaxMs] backoff cap
+   */
+  constructor(options = {}) {
     super();
-    this.store = new Store({
-      name: 'connections',
-      defaults: { connections: [] },
-    });
-    this.env = buildEnv();
-    this.kubectlPath = resolveKubectl(this.env);
+    this.store =
+      options.store ||
+      new Store({
+        name: 'connections',
+        defaults: { connections: [] },
+      });
+    this.env = options.env || buildEnv();
+    this.kubectlPath = options.kubectlPath || resolveKubectl(this.env);
+    this.reconnectBaseMs = options.reconnectBaseMs ?? RECONNECT_BASE_MS;
+    this.reconnectMaxMs = options.reconnectMaxMs ?? RECONNECT_MAX_MS;
     // runtime state keyed by connection id
     this.runtime = new Map();
   }
@@ -176,6 +202,13 @@ class ConnectionManager extends EventEmitter {
         lastError: null,
         child: null,
         stopping: false,
+        // Auto-reconnect state: `desired` is true while the user wants the
+        // forward up; `attempt` counts consecutive failed (re)connects and
+        // drives the backoff; `retryTimer` is the pending reconnect timeout.
+        desired: false,
+        attempt: 0,
+        retryTimer: null,
+        lostConnection: false,
       });
     }
     return this.runtime.get(id);
@@ -198,6 +231,7 @@ class ConnectionManager extends EventEmitter {
       scheme: rt.scheme,
       url: rt.localPort ? `${rt.scheme}://localhost:${rt.localPort}` : null,
       lastError: rt.lastError,
+      attempt: rt.attempt,
     };
   }
 
@@ -242,33 +276,100 @@ class ConnectionManager extends EventEmitter {
     return true;
   }
 
+  _clearRetry(rt) {
+    if (rt.retryTimer) {
+      clearTimeout(rt.retryTimer);
+      rt.retryTimer = null;
+    }
+  }
+
   _emitStatus(id) {
     const snap = this.get(id);
     if (snap) this.emit('status', snap);
   }
 
+  /**
+   * Turn a stored command into kubectl argv, or return an error string when
+   * the command is not a port-forward.
+   */
+  _argsFor(conn) {
+    let args = tokenize(conn.command);
+    if (args.length && /kubectl$/.test(args[0])) {
+      args = args.slice(1); // strip leading "kubectl"
+    }
+    if (args.length === 0 || !args.includes('port-forward')) {
+      return { error: 'Command must be a "kubectl port-forward ..." command.' };
+    }
+    return { args };
+  }
+
+  /** User intent: bring the forward up and keep it up until stop() is called. */
   start(id) {
     const conn = this._persisted().find((c) => c.id === id);
     if (!conn) return null;
     const rt = this._runtimeFor(id);
     if (rt.child) return this._snapshot(conn); // already running
 
-    let args = tokenize(conn.command);
-    if (args.length && /kubectl$/.test(args[0])) {
-      args = args.slice(1); // strip leading "kubectl"
-    }
-    if (args.length === 0 || !args.includes('port-forward')) {
+    const { args, error } = this._argsFor(conn);
+    if (error) {
       rt.status = 'error';
-      rt.lastError = 'Command must be a "kubectl port-forward ..." command.';
+      rt.lastError = error;
+      rt.desired = false;
       this._emitStatus(id);
       return this._snapshot(conn);
     }
 
+    this._clearRetry(rt);
+    rt.desired = true;
+    rt.attempt = 0;
+    rt.stopping = false;
+    rt.lastError = null;
     const parsedPort = parseLocalPort(args);
     rt.localPort = parsedPort;
     rt.scheme = parsedPort ? schemeForPort(parsedPort) : 'http';
-    rt.lastError = null;
+
+    this._spawn(id);
+    return this._snapshot(conn);
+  }
+
+  /**
+   * Schedule a respawn after an unexpected failure. Exponential backoff
+   * (1s, 2s, 4s, ... capped at 30s), retried indefinitely while desired.
+   */
+  _scheduleReconnect(id, reason) {
+    const rt = this._runtimeFor(id);
+    this._clearRetry(rt);
+    const delay = backoffDelay(rt.attempt, this.reconnectBaseMs, this.reconnectMaxMs);
+    rt.attempt += 1;
+    rt.status = 'reconnecting';
+    rt.lastError = reason || null;
+    rt.retryTimer = setTimeout(() => {
+      rt.retryTimer = null;
+      if (!rt.desired || rt.child) return;
+      this._spawn(id);
+    }, delay);
+    this._emitStatus(id);
+  }
+
+  /** Spawn kubectl for a connection and wire up status tracking. */
+  _spawn(id) {
+    const conn = this._persisted().find((c) => c.id === id);
+    if (!conn) return;
+    const rt = this._runtimeFor(id);
+    if (rt.child) return;
+
+    const { args, error } = this._argsFor(conn);
+    if (error) {
+      // Command was edited into something invalid while we were reconnecting.
+      rt.status = 'error';
+      rt.lastError = error;
+      rt.desired = false;
+      this._emitStatus(id);
+      return;
+    }
+
     rt.stopping = false;
+    rt.lostConnection = false;
     rt.status = 'starting';
     this._emitStatus(id);
 
@@ -282,8 +383,9 @@ class ConnectionManager extends EventEmitter {
       rt.status = 'error';
       rt.lastError = err.message;
       rt.child = null;
+      rt.desired = false;
       this._emitStatus(id);
-      return this._snapshot(conn);
+      return;
     }
 
     rt.child = child;
@@ -294,6 +396,8 @@ class ConnectionManager extends EventEmitter {
       if (m) {
         rt.localPort = parseInt(m[1], 10);
         rt.scheme = schemeForPort(rt.localPort);
+        rt.attempt = 0; // healthy again: reset backoff
+        rt.lastError = null;
         if (rt.status !== 'running') {
           rt.status = 'running';
         }
@@ -318,40 +422,74 @@ class ConnectionManager extends EventEmitter {
         rt.lastError = text.trim().split('\n').slice(-1)[0];
         this._emitStatus(id);
       }
+      // Some kubectl versions keep running after the pod is gone but every
+      // forwarded connection fails. Kill the child; the close handler then
+      // schedules a reconnect. Only do this once per child.
+      if (
+        rt.desired &&
+        !rt.stopping &&
+        !rt.lostConnection &&
+        LOST_CONNECTION_RE.test(text)
+      ) {
+        rt.lostConnection = true;
+        try {
+          child.kill('SIGTERM');
+        } catch (_) {
+          /* ignore */
+        }
+      }
     });
 
     child.on('error', (err) => {
+      // e.g. kubectl binary missing: not something a retry will fix.
       rt.status = 'error';
       rt.lastError = err.message;
       rt.child = null;
       rt.pid = null;
+      rt.desired = false;
       this._emitStatus(id);
     });
 
     child.on('close', (code) => {
+      if (rt.child !== child) return; // stale handler (already replaced)
       rt.child = null;
       rt.pid = null;
       if (rt.stopping) {
         rt.status = 'stopped';
         rt.lastError = null;
-      } else if (code && code !== 0) {
+        rt.stopping = false;
+        this._emitStatus(id);
+        return;
+      }
+      if (rt.desired) {
+        const reason =
+          rt.lastError ||
+          (code && code !== 0
+            ? `kubectl exited with code ${code}`
+            : 'kubectl exited unexpectedly');
+        this._scheduleReconnect(id, reason);
+        return;
+      }
+      if (code && code !== 0) {
         rt.status = 'error';
         if (!rt.lastError) rt.lastError = `kubectl exited with code ${code}`;
       } else {
         rt.status = 'stopped';
       }
-      rt.stopping = false;
       this._emitStatus(id);
     });
-
-    return this._snapshot(conn);
   }
 
   stop(id) {
     const rt = this.runtime.get(id);
-    if (!rt || !rt.child) {
-      if (rt && rt.status !== 'stopped') {
+    if (!rt) return this.get(id);
+    rt.desired = false;
+    this._clearRetry(rt);
+    if (!rt.child) {
+      // Nothing running (possibly waiting on a reconnect timer).
+      if (rt.status !== 'stopped') {
         rt.status = 'stopped';
+        rt.lastError = null;
         this._emitStatus(id);
       }
       return this.get(id);
@@ -381,7 +519,17 @@ class ConnectionManager extends EventEmitter {
   stopAll() {
     for (const id of this.runtime.keys()) {
       const rt = this.runtime.get(id);
-      if (rt && rt.child) {
+      if (!rt) continue;
+      rt.desired = false;
+      this._clearRetry(rt);
+      if (!rt.child) {
+        // Waiting on a reconnect timer: nothing to kill, just settle status.
+        if (rt.status !== 'stopped' && rt.status !== 'error') {
+          rt.status = 'stopped';
+          rt.lastError = null;
+          this._emitStatus(id);
+        }
+      } else {
         rt.stopping = true;
         try {
           rt.child.kill('SIGTERM');
@@ -398,4 +546,12 @@ class ConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { ConnectionManager, tokenize, parseLocalPort };
+module.exports = {
+  ConnectionManager,
+  tokenize,
+  parseLocalPort,
+  backoffDelay,
+  LOST_CONNECTION_RE,
+  RECONNECT_BASE_MS,
+  RECONNECT_MAX_MS,
+};
